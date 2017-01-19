@@ -1,6 +1,6 @@
 module Example.App (main) where
 
-import Prelude (Unit, (<$>), (+), (<>), (<<<), bind, id, pure, show, void)
+import Prelude (Unit, ($), (<$>), (+), (<>), (<<<), bind, id, pure, show, void)
 
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE, info)
@@ -14,6 +14,7 @@ import React as React
 import React.DOM as DOM
 import React.DOM.Props as Props
 
+import React.Redux (composeMiddleware)
 import React.Redux as Redux
 
 type State = { counterA :: Int, counterB :: Int }
@@ -30,6 +31,8 @@ data ActionB = IncrementB
 
 type Effect eff = (console :: CONSOLE, timer :: TIMER | eff)
 
+data WrappedAction = WrappedAction Action String
+
 store :: forall eff. Eff (Effect (Redux.ReduxEffect eff)) (Redux.Store Action State)
 store = Redux.createStore reducer initialState (middlewareEnhancer <<< reduxDevtoolsExtensionEnhancer)
   where
@@ -40,11 +43,12 @@ store = Redux.createStore reducer initialState (middlewareEnhancer <<< reduxDevt
   reduxDevtoolsExtensionEnhancer = Redux.fromEnhancerForeign reduxDevtoolsExtensionEnhancer_
 
   middlewareEnhancer :: Redux.Enhancer (Effect eff) Action State
-  middlewareEnhancer = Redux.applyMiddleware [ loggerMiddleware, timeoutSchedulerMiddleware ]
+  middlewareEnhancer = Redux.applyMiddleware (loggerMiddleware `composeMiddleware` timeoutSchedulerMiddleware)
 
-  loggerMiddleware :: Redux.Middleware (Effect eff) Action State Unit
-  loggerMiddleware { getState, dispatch } next action = do
+  loggerMiddleware :: Redux.Middleware (Effect eff) Action State Unit WrappedAction Action
+  loggerMiddleware { getState, dispatch } next (WrappedAction action s) = do
     info showAction
+    info s
     next action
     state <- getState
     logState state
@@ -59,11 +63,11 @@ store = Redux.createStore reducer initialState (middlewareEnhancer <<< reduxDevt
            ActionA (DelayedIncrementA delay) -> "ActionA (DelayedIncrementA " <> show delay <> ")"
            ActionB IncrementB -> "ActionB IncremementB"
 
-  timeoutSchedulerMiddleware :: Redux.Middleware (Effect eff) Action State Unit
+  timeoutSchedulerMiddleware :: Redux.Middleware (Effect eff) Action State Unit Action WrappedAction
   timeoutSchedulerMiddleware { getState, dispatch } next action =
     case action of
-         ActionA (DelayedIncrementA delay) -> void (setTimeout delay (void (next action)))
-         _ -> void (next action)
+         ActionA (DelayedIncrementA delay) -> void (setTimeout delay (void (next (WrappedAction action "delayed"))))
+         _ -> void (next (WrappedAction action "normal"))
 
   reducer :: Redux.Reducer Action State
   reducer action =
@@ -97,7 +101,7 @@ store = Redux.createStore reducer initialState (middlewareEnhancer <<< reduxDevt
                                         ActionB a' -> Just a'
                                         _ -> Nothing)
 
-appClass :: Redux.ReduxReactClass' State State
+appClass :: Redux.ReduxReactClass' State State Action
 appClass = Redux.createClass' id (Redux.spec' render)
   where
   render :: forall eff. Redux.Render State Unit eff (Eff (Redux.ReduxEffect eff)) Action
